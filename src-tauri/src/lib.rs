@@ -66,9 +66,11 @@ enum InstancePhase {
 struct InstanceRuntime {
     child: Option<Child>,
     generation: u64,
+    revision: u64,
     phase: InstancePhase,
     url: Option<String>,
     detail: Option<String>,
+    version: Option<String>,
     error: Option<String>,
     log: VecDeque<String>,
 }
@@ -78,9 +80,11 @@ impl InstanceRuntime {
         Self {
             child: None,
             generation: 0,
+            revision: 0,
             phase: InstancePhase::Stopped,
             url: None,
             detail: None,
+            version: None,
             error: None,
             log: VecDeque::new(),
         }
@@ -90,9 +94,11 @@ impl InstanceRuntime {
         InstanceSnapshot {
             kind: kind.id(),
             label: kind.label(),
+            revision: self.revision,
             phase: self.phase,
             url: self.url.clone(),
             detail: self.detail.clone(),
+            version: self.version.clone(),
             error: self.error.clone(),
             log: self.log.iter().cloned().collect(),
         }
@@ -143,6 +149,7 @@ impl DshState {
             while runtime.log.len() > MAX_KEPT_LOG_LINES {
                 runtime.log.pop_front();
             }
+            runtime.revision = runtime.revision.wrapping_add(1);
         }
         self.emit_snapshot(handle, kind);
         true
@@ -163,6 +170,7 @@ impl DshState {
             runtime.phase = InstancePhase::Ready;
             runtime.url = Some(url);
             runtime.error = None;
+            runtime.revision = runtime.revision.wrapping_add(1);
         }
         self.emit_snapshot(handle, kind);
     }
@@ -181,8 +189,8 @@ impl DshState {
             }
             runtime.phase = InstancePhase::Error;
             runtime.url = None;
-            runtime.detail = None;
             runtime.error = Some(message);
+            runtime.revision = runtime.revision.wrapping_add(1);
         }
         self.emit_snapshot(handle, kind);
     }
@@ -199,6 +207,7 @@ impl DshState {
         for kind in InstanceKind::ALL {
             let mut runtime = self.runtime(kind).lock().unwrap();
             runtime.generation = runtime.generation.wrapping_add(1);
+            runtime.revision = runtime.revision.wrapping_add(1);
             if let Some(child) = runtime.child.take() {
                 children.push(child);
             }
@@ -215,9 +224,11 @@ impl DshState {
 struct InstanceSnapshot {
     kind: &'static str,
     label: &'static str,
+    revision: u64,
     phase: InstancePhase,
     url: Option<String>,
     detail: Option<String>,
+    version: Option<String>,
     error: Option<String>,
     log: Vec<String>,
 }
@@ -225,17 +236,29 @@ struct InstanceSnapshot {
 #[derive(Serialize)]
 struct StatusSnapshot {
     instances: Vec<InstanceSnapshot>,
-    wsl_distributions: Vec<String>,
+    wsl_distributions: Vec<WslDistributionInfo>,
+}
+
+#[derive(Serialize)]
+struct WslDistributionInfo {
+    name: String,
+    version: Option<String>,
+    available: bool,
 }
 
 #[tauri::command]
 fn status(state: State<'_, DshState>) -> StatusSnapshot {
+    // Distribution inspection starts login shells and can outlive the initial
+    // Windows startup. Snapshot instances last so the response cannot carry a
+    // stale `starting` state that overwrites a newer event in the frontend.
+    let wsl_distributions = list_wsl_distribution_info();
+    let instances = InstanceKind::ALL
+        .into_iter()
+        .map(|kind| state.snapshot(kind))
+        .collect();
     StatusSnapshot {
-        instances: InstanceKind::ALL
-            .into_iter()
-            .map(|kind| state.snapshot(kind))
-            .collect(),
-        wsl_distributions: list_wsl_distros().unwrap_or_default(),
+        instances,
+        wsl_distributions,
     }
 }
 
@@ -361,6 +384,51 @@ fn spawn_dsh(dsh: &Path) -> std::io::Result<Child> {
     }
 }
 
+fn parse_version_output(text: &str) -> Option<String> {
+    text.lines().map(str::trim).find_map(|line| {
+        let version = line.strip_prefix('v').unwrap_or(line);
+        let begins_with_digit = version
+            .chars()
+            .next()
+            .is_some_and(|character| character.is_ascii_digit());
+        let safe_version = version.chars().all(|character| {
+            character.is_ascii_alphanumeric() || matches!(character, '.' | '-' | '+' | '_')
+        });
+        (begins_with_digit && safe_version).then(|| version.to_owned())
+    })
+}
+
+fn probe_dsh_version(dsh: &Path) -> Option<String> {
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+
+        let dir = dsh.parent().unwrap_or(Path::new("."));
+        let name = dsh.file_name()?.to_str()?;
+        let mut search_dirs = vec![dir.to_path_buf()];
+        if let Some(current_path) = std::env::var_os("PATH") {
+            search_dirs.extend(std::env::split_paths(&current_path));
+        }
+        let search_path = std::env::join_paths(search_dirs).ok()?;
+        let output = Command::new("cmd.exe")
+            .args(["/D", "/C", name, "--version"])
+            .env("PATH", search_path)
+            .creation_flags(CREATE_NO_WINDOW)
+            .output()
+            .ok()?;
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        parse_version_output(&stdout).or_else(|| parse_version_output(&stderr))
+    }
+    #[cfg(not(windows))]
+    {
+        let output = Command::new(dsh).arg("--version").output().ok()?;
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        parse_version_output(&stdout).or_else(|| parse_version_output(&stderr))
+    }
+}
+
 fn is_linux_wsl_path(path: &str) -> bool {
     if !path.starts_with('/') {
         return false;
@@ -376,6 +444,7 @@ fn is_linux_wsl_path(path: &str) -> bool {
 struct WslDsh {
     distro: String,
     path: String,
+    version: Option<String>,
 }
 
 fn decode_wsl_output(bytes: &[u8]) -> String {
@@ -426,15 +495,32 @@ fn list_wsl_distros() -> Result<Vec<String>, String> {
 }
 
 #[cfg(windows)]
-fn find_wsl_dsh(distro: &str) -> Result<WslDsh, String> {
+fn probe_wsl_dsh_version(distro: &str, dsh: &str) -> Option<String> {
     use std::os::windows::process::CommandExt;
 
-    if !list_wsl_distros()?
-        .iter()
-        .any(|candidate| candidate == distro)
-    {
-        return Err(format!("WSL 发行版不存在：{distro}"));
-    }
+    let output = Command::new("wsl.exe")
+        .args([
+            "--distribution",
+            distro,
+            "--exec",
+            "bash",
+            "-lic",
+            "exec \"$1\" --version",
+            "dsh-gui",
+            dsh,
+        ])
+        .creation_flags(CREATE_NO_WINDOW)
+        .output()
+        .ok()?;
+    let stdout = decode_wsl_output(&output.stdout);
+    let stderr = decode_wsl_output(&output.stderr);
+    parse_version_output(&stdout).or_else(|| parse_version_output(&stderr))
+}
+
+#[cfg(windows)]
+fn find_wsl_dsh_in_known_distro(distro: &str) -> Result<WslDsh, String> {
+    use std::os::windows::process::CommandExt;
+
     let output = Command::new("wsl.exe")
         .args([
             "--distribution",
@@ -460,12 +546,49 @@ fn find_wsl_dsh(distro: &str) -> Result<WslDsh, String> {
     Ok(WslDsh {
         distro: distro.to_owned(),
         path: path.to_owned(),
+        version: probe_wsl_dsh_version(distro, path),
     })
+}
+
+#[cfg(windows)]
+fn find_wsl_dsh(distro: &str) -> Result<WslDsh, String> {
+    if !list_wsl_distros()?
+        .iter()
+        .any(|candidate| candidate == distro)
+    {
+        return Err(format!("WSL 发行版不存在：{distro}"));
+    }
+    find_wsl_dsh_in_known_distro(distro)
 }
 
 #[cfg(not(windows))]
 fn find_wsl_dsh(_distro: &str) -> Result<WslDsh, String> {
     Err("WSL 实例仅支持 Windows".to_string())
+}
+
+#[cfg(windows)]
+fn list_wsl_distribution_info() -> Vec<WslDistributionInfo> {
+    list_wsl_distros()
+        .unwrap_or_default()
+        .into_iter()
+        .map(|name| match find_wsl_dsh_in_known_distro(&name) {
+            Ok(dsh) => WslDistributionInfo {
+                name,
+                version: dsh.version,
+                available: true,
+            },
+            Err(_) => WslDistributionInfo {
+                name,
+                version: None,
+                available: false,
+            },
+        })
+        .collect()
+}
+
+#[cfg(not(windows))]
+fn list_wsl_distribution_info() -> Vec<WslDistributionInfo> {
+    Vec::new()
 }
 
 fn free_loopback_port() -> std::io::Result<u16> {
@@ -560,9 +683,11 @@ fn launch_instance(
             return;
         }
         runtime.generation = runtime.generation.wrapping_add(1);
+        runtime.revision = runtime.revision.wrapping_add(1);
         runtime.phase = InstancePhase::Starting;
         runtime.url = None;
         runtime.detail = None;
+        runtime.version = None;
         runtime.error = None;
         runtime.log.clear();
         runtime.generation
@@ -573,12 +698,14 @@ fn launch_instance(
         InstanceKind::Windows => find_dsh()
             .ok_or_else(|| "未找到 Windows 全局 dsh；请执行 npm i -g @deepseek-ai/dsh".to_string())
             .and_then(|dsh| {
+                let version = probe_dsh_version(&dsh);
                 spawn_dsh(&dsh)
                     .map(|child| {
                         (
                             child,
                             format!("启动 {} web --port 0", dsh.display()),
                             Some("Windows".to_string()),
+                            version,
                         )
                     })
                     .map_err(|error| format!("启动 Windows dsh 失败：{error}"))
@@ -590,19 +717,21 @@ fn launch_instance(
             .and_then(|dsh| {
                 let port =
                     free_loopback_port().map_err(|error| format!("分配 WSL 端口失败：{error}"))?;
+                let version = dsh.version.clone();
                 spawn_wsl_dsh(&dsh.distro, &dsh.path, port)
                     .map(|child| {
                         (
                             child,
                             format!("启动 WSL {}:{} web --port {port}", dsh.distro, dsh.path),
                             Some(dsh.distro),
+                            version,
                         )
                     })
                     .map_err(|error| format!("启动 WSL dsh 失败：{error}"))
             }),
     };
 
-    let (mut child, launch_log, detail) = match spawned {
+    let (mut child, launch_log, detail, version) = match spawned {
         Ok(value) => value,
         Err(message) => {
             state.set_error(handle, kind, generation, message);
@@ -621,6 +750,8 @@ fn launch_instance(
         }
         runtime.child = Some(child);
         runtime.detail = detail;
+        runtime.version = version;
+        runtime.revision = runtime.revision.wrapping_add(1);
     }
     state.push_log(handle, kind, generation, launch_log);
     spawn_stdout_watcher(handle.clone(), kind, generation, stdout);
@@ -631,9 +762,9 @@ fn stop_one_instance(handle: &tauri::AppHandle, state: &DshState, kind: Instance
     let child = {
         let mut runtime = state.runtime(kind).lock().unwrap();
         runtime.generation = runtime.generation.wrapping_add(1);
+        runtime.revision = runtime.revision.wrapping_add(1);
         runtime.phase = InstancePhase::Stopped;
         runtime.url = None;
-        runtime.detail = None;
         runtime.error = None;
         runtime.log.clear();
         runtime.child.take()
@@ -742,7 +873,22 @@ pub fn run() {
 
 #[cfg(test)]
 mod tests {
-    use super::{decode_wsl_output, extract_url, is_linux_wsl_path, InstanceKind};
+    use super::{
+        decode_wsl_output, extract_url, is_linux_wsl_path, parse_version_output, InstanceKind,
+    };
+
+    #[test]
+    fn extracts_plain_semantic_versions_from_command_output() {
+        assert_eq!(
+            parse_version_output("Welcome to Ubuntu\n0.1.0-rc.6\n"),
+            Some("0.1.0-rc.6".to_string())
+        );
+        assert_eq!(
+            parse_version_output("dsh version 0.1.0"),
+            None,
+            "descriptive log lines must not be mistaken for a version"
+        );
+    }
 
     #[test]
     fn extracts_the_dsh_web_readiness_url() {
