@@ -1,0 +1,20 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" role="img" aria-label="dsh whale">
+  <path
+    d="M183 77c21-5 28-26 21-48 21 6 32 21 31 38 8-8 14-9 18-5-5 22-21 37-46 42-10 2-17-2-24-6Z"
+    fill="#fafafa"
+    stroke="#181818"
+    stroke-width="8"
+    stroke-linejoin="round"
+  />
+  <path
+    d="M64 20h96c35 0 52 17 52 52v112c0 35-17 52-52 52H64c-35 0-52-17-52-52V72c0-35 17-52 52-52Z"
+    fill="#fafafa"
+    stroke="#181818"
+    stroke-width="8"
+  />
+  <path
+    d="M91 148c30 3 54 23 62 51-30 0-58-18-72-45Z"
+    fill="#555555"
+  />
+  <path d="M40 60h16l32 24-32 24H40l31-24Z" fill="#111111" />
+</svg>

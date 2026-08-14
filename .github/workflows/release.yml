@@ -1,0 +1,79 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release-windows:
+    name: Windows x64
+    runs-on: windows-latest
+    timeout-minutes: 30
+
+    defaults:
+      run:
+        shell: pwsh
+        working-directory: src-tauri
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust build
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri -> target
+
+      - name: Run tests
+        run: cargo test --locked
+
+      - name: Build release binary
+        run: cargo build --release --locked
+
+      - name: Prepare release files
+        run: |
+          New-Item -ItemType Directory -Force release | Out-Null
+          Copy-Item target/release/dsh-gui.exe release/dsh-gui-windows-x64.exe
+          $hash = (Get-FileHash release/dsh-gui-windows-x64.exe -Algorithm SHA256).Hash.ToLowerInvariant()
+          "$hash  dsh-gui-windows-x64.exe" | Set-Content release/dsh-gui-windows-x64.exe.sha256 -Encoding ascii
+
+      - name: Upload workflow artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: dsh-gui-windows-x64-${{ github.ref_name }}
+          path: |
+            src-tauri/release/dsh-gui-windows-x64.exe
+            src-tauri/release/dsh-gui-windows-x64.exe.sha256
+          if-no-files-found: error
+
+      - name: Create GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $tag = "${{ github.ref_name }}"
+          $assets = @(
+            "release/dsh-gui-windows-x64.exe",
+            "release/dsh-gui-windows-x64.exe.sha256"
+          )
+
+          gh release view $tag --repo "${{ github.repository }}" *> $null
+          if ($LASTEXITCODE -eq 0) {
+            gh release upload $tag @assets --clobber --repo "${{ github.repository }}"
+          } else {
+            $options = @("--verify-tag", "--generate-notes", "--title", $tag)
+            if ($tag.Contains("-")) { $options += "--prerelease" }
+            gh release create $tag @assets @options --repo "${{ github.repository }}"
+          }

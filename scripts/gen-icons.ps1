@@ -11,34 +11,74 @@ function New-IconBitmap([int]$size) {
     $bmp = New-Object System.Drawing.Bitmap($size, $size, [System.Drawing.Imaging.PixelFormat]::Format32bppArgb)
     $g = [System.Drawing.Graphics]::FromImage($bmp)
     $g.SmoothingMode = [System.Drawing.Drawing2D.SmoothingMode]::AntiAlias
-    $g.TextRenderingHint = [System.Drawing.Text.TextRenderingHint]::AntiAliasGridFit
+    $g.PixelOffsetMode = [System.Drawing.Drawing2D.PixelOffsetMode]::HighQuality
+    $g.CompositingQuality = [System.Drawing.Drawing2D.CompositingQuality]::HighQuality
     $g.Clear([System.Drawing.Color]::Transparent)
 
-    # Rounded dark-blue tile.
-    $d = [float]($size * 0.22)
-    $path = New-Object System.Drawing.Drawing2D.GraphicsPath
-    $path.AddArc(0, 0, $d, $d, 180, 90)
-    $path.AddArc($size - $d, 0, $d, $d, 270, 90)
-    $path.AddArc($size - $d, $size - $d, $d, $d, 0, 90)
-    $path.AddArc(0, $size - $d, $d, $d, 90, 90)
-    $path.CloseFigure()
-    $rect = New-Object System.Drawing.RectangleF(0, 0, $size, $size)
-    $brush = New-Object System.Drawing.Drawing2D.LinearGradientBrush(
-        $rect,
-        [System.Drawing.Color]::FromArgb(255, 46, 78, 138),
-        [System.Drawing.Color]::FromArgb(255, 12, 20, 38),
-        90)
-    $g.FillPath($brush, $path)
+    $scale = [float]$size / 256.0
+    function P([float]$value) { return [float]($value * $scale) }
 
-    # White "dsh" wordmark.
-    $font = New-Object System.Drawing.Font("Segoe UI", [float]($size * 0.32),
-        [System.Drawing.FontStyle]::Bold, [System.Drawing.GraphicsUnit]::Pixel)
-    $format = New-Object System.Drawing.StringFormat
-    $format.Alignment = [System.Drawing.StringAlignment]::Center
-    $format.LineAlignment = [System.Drawing.StringAlignment]::Center
-    $g.DrawString("dsh", $font, [System.Drawing.Brushes]::White, $rect, $format)
+    # Raised, forked tail. The silhouette borrows the gesture of a breaching
+    # whale while the body remains the product's rounded-rectangle motif.
+    $tail = New-Object System.Drawing.Drawing2D.GraphicsPath
+    $tail.StartFigure()
+    $tail.AddBezier((P 183), (P 77), (P 204), (P 72), (P 211), (P 51), (P 204), (P 29))
+    $tail.AddBezier((P 204), (P 29), (P 225), (P 35), (P 236), (P 50), (P 235), (P 67))
+    $tail.AddBezier((P 235), (P 67), (P 243), (P 59), (P 249), (P 58), (P 253), (P 62))
+    $tail.AddBezier((P 253), (P 62), (P 248), (P 84), (P 232), (P 99), (P 207), (P 104))
+    $tail.AddBezier((P 207), (P 104), (P 197), (P 106), (P 190), (P 102), (P 183), (P 98))
+    $tail.CloseFigure()
+    $outlineWidth = [float][Math]::Max(1.0, (P 8))
+    $tailBrush = New-Object System.Drawing.SolidBrush([System.Drawing.Color]::FromArgb(255, 250, 250, 250))
+    $tailPen = New-Object System.Drawing.Pen([System.Drawing.Color]::FromArgb(255, 24, 24, 24), $outlineWidth)
+    $tailPen.LineJoin = [System.Drawing.Drawing2D.LineJoin]::Round
+    $g.FillPath($tailBrush, $tail)
+    $g.DrawPath($tailPen, $tail)
 
-    $font.Dispose(); $format.Dispose(); $brush.Dispose(); $path.Dispose(); $g.Dispose()
+    # Continuous-corner, near-square whale body.
+    $body = New-Object System.Drawing.Drawing2D.GraphicsPath
+    $body.StartFigure()
+    $body.AddLine((P 64), (P 20), (P 160), (P 20))
+    $body.AddBezier((P 160), (P 20), (P 195), (P 20), (P 212), (P 37), (P 212), (P 72))
+    $body.AddLine((P 212), (P 72), (P 212), (P 184))
+    $body.AddBezier((P 212), (P 184), (P 212), (P 219), (P 195), (P 236), (P 160), (P 236))
+    $body.AddLine((P 160), (P 236), (P 64), (P 236))
+    $body.AddBezier((P 64), (P 236), (P 29), (P 236), (P 12), (P 219), (P 12), (P 184))
+    $body.AddLine((P 12), (P 184), (P 12), (P 72))
+    $body.AddBezier((P 12), (P 72), (P 12), (P 37), (P 29), (P 20), (P 64), (P 20))
+    $body.CloseFigure()
+    $bodyBrush = New-Object System.Drawing.SolidBrush([System.Drawing.Color]::FromArgb(255, 250, 250, 250))
+    $bodyPen = New-Object System.Drawing.Pen([System.Drawing.Color]::FromArgb(255, 24, 24, 24), $outlineWidth)
+    $bodyPen.LineJoin = [System.Drawing.Drawing2D.LineJoin]::Round
+    $g.FillPath($bodyBrush, $body)
+    $g.DrawPath($bodyPen, $body)
+
+    # A single flipper gives the otherwise geometric body a whale silhouette.
+    $flipper = New-Object System.Drawing.Drawing2D.GraphicsPath
+    $flipper.StartFigure()
+    $flipper.AddBezier((P 91), (P 148), (P 121), (P 151), (P 145), (P 171), (P 153), (P 199))
+    $flipper.AddBezier((P 153), (P 199), (P 123), (P 199), (P 95), (P 181), (P 81), (P 154))
+    $flipper.CloseFigure()
+    $flipperBrush = New-Object System.Drawing.SolidBrush([System.Drawing.Color]::FromArgb(255, 85, 85, 85))
+    $g.FillPath($flipperBrush, $flipper)
+
+    # Terminal-prompt eye: the solid chevron stays legible at small sizes and
+    # ties the whale to dsh's command-line identity.
+    $eye = New-Object System.Drawing.Drawing2D.GraphicsPath
+    $eye.StartFigure()
+    $eye.AddLine((P 40), (P 60), (P 56), (P 60))
+    $eye.AddLine((P 56), (P 60), (P 88), (P 84))
+    $eye.AddLine((P 88), (P 84), (P 56), (P 108))
+    $eye.AddLine((P 56), (P 108), (P 40), (P 108))
+    $eye.AddLine((P 40), (P 108), (P 71), (P 84))
+    $eye.CloseFigure()
+    $eyeBrush = New-Object System.Drawing.SolidBrush([System.Drawing.Color]::FromArgb(255, 17, 17, 17))
+    $g.FillPath($eyeBrush, $eye)
+
+    $eyeBrush.Dispose(); $eye.Dispose()
+    $flipperBrush.Dispose(); $flipper.Dispose()
+    $bodyPen.Dispose(); $bodyBrush.Dispose(); $body.Dispose()
+    $tailPen.Dispose(); $tailBrush.Dispose(); $tail.Dispose(); $g.Dispose()
     return $bmp
 }
 
@@ -66,7 +106,10 @@ function ConvertTo-Ico([byte[][]]$pngs, [int[]]$sizes) {
     return $ms.ToArray()
 }
 
-$sizes = @(16, 24, 32, 48, 64, 128, 256)
+# Tauri 2.6.x decodes only the first ICO entry for its runtime window icon.
+# Windows 11's taskbar uses 24px at 100% DPI, so keep 24 first; the remaining
+# entries are still available to the executable resource and Windows shell.
+$sizes = @(24, 16, 20, 32, 40, 48, 64, 80, 96, 128, 256)
 $pngs = New-Object 'System.Collections.Generic.List[byte[]]'
 foreach ($size in $sizes) {
     $bmp = New-IconBitmap $size
