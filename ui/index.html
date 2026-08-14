@@ -1,0 +1,921 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>dsh</title>
+<style>
+  :root {
+    color-scheme: dark;
+    --titlebar-height: 36px;
+    --shell-bg: #181818;
+    --titlebar-bg: #202020;
+    --hairline: #303030;
+    --muted: #929292;
+    --text: #e8e8e8;
+    --accent: #a7a7a7;
+  }
+
+  *, *::before, *::after {
+    box-sizing: border-box;
+    corner-shape: squircle;
+  }
+
+  html, body, #app { width: 100%; height: 100%; }
+
+  body {
+    margin: 0;
+    overflow: hidden;
+    background: var(--shell-bg);
+    color: var(--text);
+    font-family: "Segoe UI Variable", "Segoe UI", system-ui, sans-serif;
+  }
+
+  button, iframe { font: inherit; }
+
+  #app {
+    display: grid;
+    grid-template-rows: var(--titlebar-height) minmax(0, 1fr);
+    background: var(--shell-bg);
+  }
+
+  .titlebar {
+    position: relative;
+    z-index: 20;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    height: var(--titlebar-height);
+    background: var(--titlebar-bg);
+    border-bottom: 1px solid var(--hairline);
+    user-select: none;
+  }
+
+  .titlebar-drag {
+    min-width: 0;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 0 12px;
+  }
+
+  *[data-tauri-drag-region] { app-region: drag; }
+
+  .titlebar button { app-region: no-drag; }
+
+  .app-title {
+    display: inline-flex;
+    align-items: center;
+    flex: none;
+    height: 100%;
+    color: #a9a9a9;
+    font-size: 12px;
+    font-weight: 600;
+    letter-spacing: 0.01em;
+  }
+
+  .menu-strip {
+    display: flex;
+    align-items: center;
+    height: 100%;
+    margin-left: 2px;
+  }
+
+  .menu-root { position: relative; height: 100%; }
+
+  .menu-trigger {
+    appearance: none;
+    height: 100%;
+    margin: 0;
+    padding: 0 10px;
+    border: 0;
+    border-radius: 10px;
+    background: transparent;
+    color: #b7b7b7;
+    font-size: 12px;
+    line-height: 1;
+  }
+
+  .menu-trigger:hover,
+  .menu-root.open .menu-trigger {
+    color: #ededed;
+    background: #303030;
+  }
+
+  .menu-popover {
+    position: absolute;
+    z-index: 50;
+    top: calc(100% + 4px);
+    left: 0;
+    width: max-content;
+    min-width: 214px;
+    padding: 5px;
+    border: 1px solid #3b3b3b;
+    border-radius: 14px;
+    background: #292929;
+    box-shadow: 0 14px 40px rgba(0, 0, 0, 0.42);
+  }
+
+  .menu-popover[hidden] { display: none; }
+
+  .menu-item {
+    appearance: none;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 24px;
+    width: 100%;
+    min-height: 29px;
+    margin: 0;
+    padding: 0 9px;
+    align-items: center;
+    border: 0;
+    border-radius: 9px;
+    background: transparent;
+    color: #e5e5e5;
+    text-align: left;
+    font-size: 12px;
+  }
+
+  .menu-item:hover:not(:disabled),
+  .menu-item:focus-visible:not(:disabled) { background: #3a3a3a; outline: 0; }
+  .menu-item:disabled { color: #777; }
+  .menu-shortcut { color: #929292; font-size: 11px; }
+  .menu-separator { height: 1px; margin: 5px 7px; background: #3b3b3b; }
+
+  .instance-manager {
+    app-region: no-drag;
+    display: flex;
+    align-items: center;
+    gap: 3px;
+    height: 100%;
+    margin-left: 4px;
+    padding-left: 10px;
+    border-left: 1px solid #363636;
+  }
+
+  .instance-tabs {
+    display: flex;
+    align-items: center;
+    gap: 2px;
+  }
+
+  .instance-tab,
+  .instance-manage-trigger {
+    appearance: none;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    height: 26px;
+    margin: 0;
+    padding: 0 9px;
+    border: 0;
+    border-radius: 9px;
+    background: transparent;
+    color: #999;
+    font-size: 11px;
+    line-height: 1;
+  }
+
+  .instance-tab:hover,
+  .instance-manage-trigger:hover,
+  .instance-menu-root.open .instance-manage-trigger {
+    background: #2c2c2c;
+    color: #dedede;
+  }
+
+  .instance-tab.active {
+    background: #343434;
+    color: #ededed;
+  }
+
+  .instance-dot {
+    width: 6px;
+    height: 6px;
+    flex: none;
+    border-radius: 50%;
+    background: #666;
+  }
+
+  .instance-tab[data-phase="starting"] .instance-dot {
+    background: #aaa;
+    animation: status-pulse 1s ease-in-out infinite;
+  }
+
+  .instance-tab[data-phase="ready"] .instance-dot { background: #7da486; }
+  .instance-tab[data-phase="error"] .instance-dot { background: #bd6973; }
+
+  @keyframes status-pulse {
+    50% { opacity: 0.38; }
+  }
+
+  .instance-menu-root {
+    position: relative;
+    display: flex;
+    align-items: center;
+    height: 100%;
+  }
+
+  .instance-manage-trigger { padding: 0 8px; }
+  .instance-manage-trigger::after { content: "⌄"; margin-top: -2px; color: #777; }
+  .instance-menu-root .menu-popover { min-width: 184px; }
+
+  .wsl-distro-select {
+    app-region: no-drag;
+    display: none;
+    width: 124px;
+    height: 26px;
+    margin: 0 1px 0 3px;
+    padding: 0 24px 0 8px;
+    border: 1px solid #3b3b3b;
+    border-radius: 9px;
+    background: #292929;
+    color: #d0d0d0;
+    font-size: 11px;
+    outline: none;
+  }
+
+  .wsl-distro-select.visible { display: block; }
+  .wsl-distro-select:hover { border-color: #505050; }
+  .wsl-distro-select:focus-visible { border-color: #777; }
+  .wsl-distro-select option { background: #292929; color: #e3e3e3; }
+
+
+  .window-controls {
+    display: flex;
+    height: 100%;
+  }
+
+  .window-control {
+    appearance: none;
+    position: relative;
+    display: grid;
+    width: 46px;
+    height: 100%;
+    margin: 0;
+    padding: 0;
+    place-items: center;
+    border: 0;
+    border-left: 1px solid transparent;
+    background: transparent;
+    color: #b0b0b0;
+    outline: none;
+    transition: color 120ms ease, background-color 120ms ease;
+  }
+
+  .window-control svg { width: 14px; height: 14px; pointer-events: none; }
+  .window-control:hover { color: #f2f2f2; background: #303030; }
+  .window-control:focus-visible { box-shadow: inset 0 0 0 1px #686868; }
+  .window-control.close:hover { background: #c42b3a; color: #fff; }
+  .window-control .restore-icon { display: none; }
+  .window-control.is-maximized .maximize-icon { display: none; }
+  .window-control.is-maximized .restore-icon { display: block; }
+
+  body.window-inactive .titlebar { opacity: 0.82; }
+
+  .viewport {
+    position: relative;
+    min-width: 0;
+    min-height: 0;
+    overflow: hidden;
+    background: #181818;
+  }
+
+  .dsh-frame {
+    position: absolute;
+    z-index: 1;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    border: 0;
+    background: #181818;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 180ms ease;
+  }
+
+  #app.web-ready .dsh-frame.active {
+    opacity: 1;
+    pointer-events: auto;
+  }
+
+  .loading-view {
+    position: absolute;
+    z-index: 2;
+    inset: 0;
+    display: grid;
+    place-items: center;
+    padding: 42px;
+    overflow: auto;
+    background:
+      radial-gradient(700px 360px at 50% 0%, rgba(255, 255, 255, 0.035), transparent 68%),
+      radial-gradient(500px 300px at 15% 100%, rgba(255, 255, 255, 0.018), transparent 72%),
+      #181818;
+    opacity: 1;
+    visibility: visible;
+    transition: opacity 180ms ease, visibility 180ms ease;
+  }
+
+  #app.web-ready .loading-view {
+    opacity: 0;
+    visibility: hidden;
+    pointer-events: none;
+  }
+
+  .loading-card { width: min(610px, 92vw); }
+
+  .loading-heading {
+    display: flex;
+    align-items: center;
+    gap: 15px;
+    margin-bottom: 25px;
+  }
+
+  .loading-glyph {
+    position: relative;
+    width: 44px;
+    height: 44px;
+    flex: none;
+    border: 1px solid rgba(255, 255, 255, 0.22);
+    border-radius: 13px;
+    background: linear-gradient(145deg, #333, #232323);
+    box-shadow: inset 0 1px rgba(255, 255, 255, 0.08), 0 15px 38px rgba(0, 0, 0, 0.24);
+  }
+
+  .loading-glyph::before,
+  .loading-glyph::after {
+    content: "";
+    position: absolute;
+    border-radius: 4px;
+    background: #d7d7d7;
+  }
+
+  .loading-glyph::before { width: 15px; height: 15px; left: 9px; top: 9px; opacity: 0.95; }
+  .loading-glyph::after { width: 9px; height: 9px; right: 8px; bottom: 8px; opacity: 0.48; }
+
+  .loading-copy h1 {
+    margin: 0 0 4px;
+    color: #eeeeee;
+    font-size: 20px;
+    font-weight: 620;
+    letter-spacing: -0.25px;
+  }
+
+  .loading-copy p { margin: 0; color: #858585; font-size: 12px; }
+
+  .status-row {
+    display: flex;
+    align-items: center;
+    gap: 11px;
+    min-height: 22px;
+    margin-bottom: 15px;
+    color: #bdbdbd;
+    font-size: 13px;
+  }
+
+  .spinner {
+    width: 15px;
+    height: 15px;
+    flex: none;
+    border: 2px solid #3b3b3b;
+    border-top-color: #b8b8b8;
+    border-radius: 50%;
+    animation: spin 800ms linear infinite;
+  }
+
+  .status-row.done .spinner { display: none; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  .error {
+    display: none;
+    margin-bottom: 14px;
+    padding: 12px 14px;
+    border: 1px solid rgba(199, 71, 90, 0.42);
+    border-radius: 9px;
+    background: rgba(86, 26, 39, 0.5);
+    color: #ffb8c1;
+    font-size: 12px;
+    line-height: 1.55;
+    white-space: pre-wrap;
+  }
+
+  .log-shell {
+    overflow: hidden;
+    border: 1px solid rgba(255, 255, 255, 0.07);
+    border-radius: 10px;
+    background: rgba(12, 12, 12, 0.62);
+    box-shadow: inset 0 1px rgba(255, 255, 255, 0.018);
+  }
+
+  .log-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    height: 31px;
+    padding: 0 12px;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.055);
+    color: #737373;
+    font-size: 9px;
+    font-weight: 650;
+    letter-spacing: 1px;
+    text-transform: uppercase;
+  }
+
+  .log-lights { display: flex; gap: 5px; }
+  .log-lights i { width: 5px; height: 5px; border-radius: 50%; background: #393939; }
+  .log-lights i:first-child { background: #747474; }
+
+  .log {
+    height: 176px;
+    margin: 0;
+    overflow-y: auto;
+    padding: 11px 13px;
+    color: #929292;
+    font: 11px/1.58 "Cascadia Mono", "SFMono-Regular", Consolas, monospace;
+    white-space: pre-wrap;
+    word-break: break-all;
+    scrollbar-color: #414141 transparent;
+    scrollbar-width: thin;
+  }
+
+  .ready-url {
+    display: none;
+    margin-top: 10px;
+    color: #858585;
+    font: 10px/1.5 "Cascadia Mono", Consolas, monospace;
+    word-break: break-all;
+  }
+
+  .loading-action {
+    display: none;
+    min-width: 104px;
+    height: 34px;
+    margin: 14px 0 0;
+    padding: 0 14px;
+    border: 1px solid #484848;
+    border-radius: 11px;
+    background: #303030;
+    color: #e5e5e5;
+    font-size: 12px;
+  }
+
+  .loading-action:hover { background: #393939; border-color: #555; }
+  .loading-action:active { transform: translateY(0.5px); }
+
+  @media (max-width: 700px) {
+    .menu-trigger { padding: 0 7px; }
+    .loading-view { padding: 24px; }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after { animation-duration: 0.01ms !important; transition-duration: 0.01ms !important; }
+  }
+</style>
+</head>
+<body>
+  <div id="app">
+    <header class="titlebar" data-tauri-drag-region>
+      <div class="titlebar-drag" data-tauri-drag-region>
+        <span class="app-title" data-tauri-drag-region>dsh</span>
+        <nav class="menu-strip" aria-label="应用菜单">
+          <div class="menu-root">
+            <button class="menu-trigger" type="button" aria-haspopup="menu" aria-expanded="false">File</button>
+            <div class="menu-popover" role="menu" hidden>
+              <button class="menu-item" type="button" role="menuitem" data-command="reload"><span>Reload dsh</span><span class="menu-shortcut">Ctrl+R</span></button>
+              <div class="menu-separator" role="separator"></div>
+              <button class="menu-item" type="button" role="menuitem" data-command="close"><span>Close Window</span><span class="menu-shortcut">Alt+F4</span></button>
+            </div>
+          </div>
+          <div class="menu-root">
+            <button class="menu-trigger" type="button" aria-haspopup="menu" aria-expanded="false">View</button>
+            <div class="menu-popover" role="menu" hidden>
+              <button class="menu-item" type="button" role="menuitem" data-command="focus"><span>Focus dsh</span><span class="menu-shortcut">F6</span></button>
+            </div>
+          </div>
+        </nav>
+        <div class="instance-manager" aria-label="dsh 实例管理">
+          <div class="instance-tabs" role="tablist" aria-label="切换 dsh 实例">
+            <button class="instance-tab active" type="button" role="tab" aria-selected="true" data-kind="windows" data-phase="starting">
+              <span class="instance-dot" aria-hidden="true"></span><span>Windows</span>
+            </button>
+            <button class="instance-tab" type="button" role="tab" aria-selected="false" data-kind="wsl" data-phase="stopped">
+              <span class="instance-dot" aria-hidden="true"></span><span>WSL</span>
+            </button>
+          </div>
+          <select class="wsl-distro-select" id="wsl-distro-select" aria-label="WSL 发行版">
+            <option value="">No distro</option>
+          </select>
+          <div class="menu-root instance-menu-root">
+            <button class="menu-trigger instance-manage-trigger" type="button" aria-haspopup="menu" aria-expanded="false">Manage</button>
+            <div class="menu-popover" id="instance-menu" role="menu" hidden></div>
+          </div>
+        </div>
+      </div>
+      <div class="window-controls">
+        <button class="window-control" id="titlebar-minimize" type="button" title="最小化" aria-label="最小化窗口">
+          <svg viewBox="0 0 14 14" aria-hidden="true"><path fill="currentColor" d="M2 7.5h10v1H2z" /></svg>
+        </button>
+        <button class="window-control" id="titlebar-maximize" type="button" title="最大化" aria-label="最大化窗口">
+          <svg class="maximize-icon" viewBox="0 0 14 14" aria-hidden="true"><path fill="none" stroke="currentColor" d="M2.5 2.5h9v9h-9z" /></svg>
+          <svg class="restore-icon" viewBox="0 0 14 14" aria-hidden="true"><path fill="none" stroke="currentColor" d="M4.5 2.5h7v7m-9-5h7v7h-7z" /></svg>
+        </button>
+        <button class="window-control close" id="titlebar-close" type="button" title="关闭" aria-label="关闭窗口">
+          <svg viewBox="0 0 14 14" aria-hidden="true"><path fill="currentColor" d="m3.15 2.44 3.85 3.85 3.85-3.85.71.71L7.71 7l3.85 3.85-.71.71L7 7.71l-3.85 3.85-.71-.71L6.29 7 2.44 3.15z" /></svg>
+        </button>
+      </div>
+    </header>
+
+    <main class="viewport">
+      <iframe class="dsh-frame active" id="dsh-frame-windows" data-kind="windows" title="Windows dsh Web 界面" allow="clipboard-read; clipboard-write; fullscreen"></iframe>
+      <iframe class="dsh-frame" id="dsh-frame-wsl" data-kind="wsl" title="WSL dsh Web 界面" allow="clipboard-read; clipboard-write; fullscreen"></iframe>
+      <section class="loading-view" aria-live="polite">
+        <div class="loading-card">
+          <div class="loading-heading">
+            <div class="loading-glyph" aria-hidden="true"></div>
+            <div class="loading-copy">
+              <h1 id="loading-title">Windows dsh</h1>
+              <p id="loading-description">正在启动本机 Web 服务</p>
+            </div>
+          </div>
+          <div class="status-row" id="status-row">
+            <span class="spinner" aria-hidden="true"></span>
+            <span id="status">正在启动 dsh web…</span>
+          </div>
+          <div class="error" id="error" role="alert"></div>
+          <div class="log-shell">
+            <div class="log-header">
+              <span id="log-context">Windows output</span>
+              <span class="log-lights" aria-hidden="true"><i></i><i></i><i></i></span>
+            </div>
+            <pre class="log" id="log"></pre>
+          </div>
+          <div class="ready-url" id="url"></div>
+          <button class="loading-action" id="loading-action" type="button"></button>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <script>
+    const $ = (id) => document.getElementById(id);
+    const appEl = $("app");
+    const logEl = $("log");
+    const statusEl = $("status");
+    const statusRowEl = $("status-row");
+    const errorEl = $("error");
+    const urlEl = $("url");
+    const loadingTitleEl = $("loading-title");
+    const loadingDescriptionEl = $("loading-description");
+    const loadingActionEl = $("loading-action");
+    const logContextEl = $("log-context");
+    const instanceMenuEl = $("instance-menu");
+    const wslDistroSelectEl = $("wsl-distro-select");
+    const maximizeButton = $("titlebar-maximize");
+    const frames = {
+      windows: $("dsh-frame-windows"),
+      wsl: $("dsh-frame-wsl"),
+    };
+    const instances = new Map([
+      ["windows", { kind: "windows", label: "Windows", phase: "starting", url: null, detail: "Windows", error: null, log: [] }],
+      ["wsl", { kind: "wsl", label: "WSL", phase: "stopped", url: null, detail: null, error: null, log: [] }],
+    ]);
+    let activeKind = "windows";
+    let selectedWslDistro = "";
+    let appWindow;
+    let tauriApi;
+
+    function activeInstance() {
+      return instances.get(activeKind);
+    }
+
+    function phaseLabel(phase) {
+      return {
+        stopped: "已停止",
+        starting: "正在启动",
+        ready: "运行中",
+        error: "启动失败",
+      }[phase] || phase;
+    }
+
+    function closeMenus() {
+      document.querySelectorAll(".menu-root.open").forEach((root) => {
+        root.classList.remove("open");
+        root.querySelector(".menu-trigger").setAttribute("aria-expanded", "false");
+        root.querySelector(".menu-popover").hidden = true;
+      });
+    }
+
+    function addManageItem(command, text) {
+      const button = document.createElement("button");
+      button.className = "menu-item";
+      button.type = "button";
+      button.role = "menuitem";
+      button.dataset.instanceCommand = command;
+      const label = document.createElement("span");
+      label.textContent = text;
+      button.appendChild(label);
+      instanceMenuEl.appendChild(button);
+    }
+
+    function renderManageMenu() {
+      const instance = activeInstance();
+      instanceMenuEl.replaceChildren();
+      if (instance.phase === "ready") {
+        const switchingDistro = instance.kind === "wsl"
+          && selectedWslDistro
+          && instance.detail !== selectedWslDistro;
+        addManageItem(
+          "restart",
+          switchingDistro ? `Switch to ${selectedWslDistro}` : `Restart ${instance.label}`,
+        );
+        const separator = document.createElement("div");
+        separator.className = "menu-separator";
+        separator.role = "separator";
+        instanceMenuEl.appendChild(separator);
+        addManageItem("stop", `Stop ${instance.label}`);
+      } else if (instance.phase === "starting") {
+        addManageItem("stop", `Stop ${instance.label}`);
+      } else if (instance.kind !== "wsl" || selectedWslDistro) {
+        addManageItem("start", `Start ${instance.label}`);
+      }
+    }
+
+    function setWslDistributions(distributions) {
+      const values = Array.isArray(distributions)
+        ? distributions.filter((value) => typeof value === "string" && value.trim())
+        : [];
+      const runningDistro = instances.get("wsl").detail;
+      if (!values.includes(selectedWslDistro)) {
+        selectedWslDistro = values.includes(runningDistro) ? runningDistro : (values[0] || "");
+      }
+      wslDistroSelectEl.replaceChildren();
+      if (!values.length) {
+        const option = document.createElement("option");
+        option.value = "";
+        option.textContent = "No distro";
+        wslDistroSelectEl.appendChild(option);
+      } else {
+        values.forEach((value) => {
+          const option = document.createElement("option");
+          option.value = value;
+          option.textContent = value;
+          wslDistroSelectEl.appendChild(option);
+        });
+      }
+      wslDistroSelectEl.value = selectedWslDistro;
+      renderManageMenu();
+    }
+
+    function syncInstanceTabs() {
+      document.querySelectorAll(".instance-tab").forEach((tab) => {
+        const instance = instances.get(tab.dataset.kind);
+        const active = tab.dataset.kind === activeKind;
+        tab.classList.toggle("active", active);
+        tab.setAttribute("aria-selected", String(active));
+        tab.dataset.phase = instance.phase;
+        tab.title = `${instance.label}${instance.detail && instance.kind === "wsl" ? ` · ${instance.detail}` : ""} · ${phaseLabel(instance.phase)}${instance.url ? ` · ${instance.url}` : ""}`;
+      });
+      wslDistroSelectEl.classList.toggle("visible", activeKind === "wsl");
+      renderManageMenu();
+    }
+
+    function updateActiveView() {
+      const instance = activeInstance();
+      const frame = frames[activeKind];
+      Object.entries(frames).forEach(([kind, candidate]) => {
+        candidate.classList.toggle("active", kind === activeKind);
+      });
+
+      const frameReady = instance.phase === "ready" && frame.dataset.loaded === "true";
+      appEl.classList.toggle("web-ready", frameReady);
+      loadingTitleEl.textContent = `${instance.label} dsh`;
+      loadingDescriptionEl.textContent = activeKind === "wsl"
+        ? `运行于 ${instance.detail || selectedWslDistro || "所选 WSL 发行版"}，与 Windows 实例相互独立`
+        : "运行于 Windows，与 WSL 实例相互独立";
+      logContextEl.textContent = `${instance.label} output`;
+      logEl.textContent = (instance.log || []).join("\n");
+      logEl.scrollTop = logEl.scrollHeight;
+
+      errorEl.style.display = instance.error ? "block" : "none";
+      errorEl.textContent = instance.error || "";
+      urlEl.style.display = instance.url ? "block" : "none";
+      urlEl.textContent = instance.url || "";
+
+      statusRowEl.classList.toggle("done", !["starting", "ready"].includes(instance.phase));
+      if (instance.phase === "stopped") {
+        statusEl.textContent = instance.kind === "wsl" && !selectedWslDistro
+          ? "未检测到可选的 WSL 发行版"
+          : `${instance.label} dsh 尚未启动`;
+      }
+      if (instance.phase === "starting") statusEl.textContent = `正在启动 ${instance.label} dsh web…`;
+      if (instance.phase === "ready") statusEl.textContent = frameReady ? "已连接" : "服务已启动，正在载入界面…";
+      if (instance.phase === "error") statusEl.textContent = `${instance.label} dsh 启动失败`;
+
+      loadingActionEl.style.display = "inline-flex";
+      if (instance.phase === "stopped" && (instance.kind !== "wsl" || selectedWslDistro)) {
+        loadingActionEl.dataset.instanceCommand = "start";
+        loadingActionEl.textContent = instance.kind === "wsl"
+          ? `Start ${selectedWslDistro}`
+          : `Start ${instance.label}`;
+      } else if (instance.phase === "error" && (instance.kind !== "wsl" || selectedWslDistro)) {
+        loadingActionEl.dataset.instanceCommand = "start";
+        loadingActionEl.textContent = `Retry ${instance.label}`;
+      } else if (instance.phase === "starting") {
+        loadingActionEl.dataset.instanceCommand = "stop";
+        loadingActionEl.textContent = `Stop ${instance.label}`;
+      } else {
+        loadingActionEl.style.display = "none";
+        delete loadingActionEl.dataset.instanceCommand;
+      }
+      syncInstanceTabs();
+    }
+
+    function applySnapshot(snapshot) {
+      if (!snapshot || !instances.has(snapshot.kind)) return;
+      instances.set(snapshot.kind, {
+        kind: snapshot.kind,
+        label: snapshot.label || instances.get(snapshot.kind).label,
+        phase: snapshot.phase || "stopped",
+        url: snapshot.url || null,
+        detail: snapshot.detail || null,
+        error: snapshot.error || null,
+        log: Array.isArray(snapshot.log) ? snapshot.log : [],
+      });
+
+      const frame = frames[snapshot.kind];
+      if (snapshot.url && frame.dataset.url !== snapshot.url) {
+        frame.dataset.url = snapshot.url;
+        frame.dataset.loaded = "false";
+        frame.src = snapshot.url;
+      }
+      updateActiveView();
+    }
+
+    function switchInstance(kind) {
+      if (!instances.has(kind) || kind === activeKind) return;
+      activeKind = kind;
+      updateActiveView();
+    }
+
+    async function invokeInstanceCommand(command) {
+      const instance = activeInstance();
+      closeMenus();
+      if (!tauriApi) return;
+
+      const commandName = `${command}_instance`;
+      const optimistic = {
+        ...instance,
+        phase: command === "stop" ? "stopped" : "starting",
+        url: command === "stop" ? null : instance.url,
+        error: null,
+      };
+      instances.set(activeKind, optimistic);
+      updateActiveView();
+      try {
+        const args = { kind: activeKind };
+        if (command !== "stop") {
+          args.distro = activeKind === "wsl" ? selectedWslDistro : null;
+        }
+        const snapshot = await tauriApi.core.invoke(commandName, args);
+        applySnapshot(snapshot);
+      } catch (error) {
+        applySnapshot({
+          ...optimistic,
+          phase: "error",
+          url: null,
+          error: String(error),
+          log: [...(optimistic.log || []), `[dsh-gui] ${error}`],
+        });
+      }
+    }
+
+    function reloadFrame() {
+      const instance = activeInstance();
+      const frame = frames[activeKind];
+      if (!instance.url) return;
+      frame.dataset.loaded = "false";
+      appEl.classList.remove("web-ready");
+      frame.src = instance.url;
+      updateActiveView();
+    }
+
+    function setupMenus() {
+      document.querySelectorAll(".menu-trigger").forEach((trigger) => {
+        trigger.addEventListener("click", (event) => {
+          event.stopPropagation();
+          const root = trigger.closest(".menu-root");
+          const shouldOpen = !root.classList.contains("open");
+          closeMenus();
+          if (shouldOpen) {
+            if (root.classList.contains("instance-menu-root")) renderManageMenu();
+            root.classList.add("open");
+            trigger.setAttribute("aria-expanded", "true");
+            root.querySelector(".menu-popover").hidden = false;
+          }
+        });
+      });
+
+      document.querySelectorAll("[data-command]").forEach((item) => {
+        item.addEventListener("click", async () => {
+          const command = item.dataset.command;
+          closeMenus();
+          if (command === "reload") reloadFrame();
+          if (command === "focus") frames[activeKind].focus();
+          if (command === "close" && appWindow) await appWindow.close();
+        });
+      });
+
+      document.querySelectorAll(".instance-tab").forEach((tab) => {
+        tab.addEventListener("click", () => switchInstance(tab.dataset.kind));
+      });
+      wslDistroSelectEl.addEventListener("change", () => {
+        selectedWslDistro = wslDistroSelectEl.value;
+        updateActiveView();
+      });
+      instanceMenuEl.addEventListener("click", (event) => {
+        const item = event.target.closest("[data-instance-command]");
+        if (item) void invokeInstanceCommand(item.dataset.instanceCommand);
+      });
+      loadingActionEl.addEventListener("click", () => {
+        if (loadingActionEl.dataset.instanceCommand) {
+          void invokeInstanceCommand(loadingActionEl.dataset.instanceCommand);
+        }
+      });
+
+      document.addEventListener("pointerdown", (event) => {
+        if (!event.target.closest(".menu-root")) closeMenus();
+      });
+      window.addEventListener("keydown", (event) => {
+        if (event.key === "Escape") closeMenus();
+        if (event.key === "F6") {
+          event.preventDefault();
+          frames[activeKind].focus();
+        }
+        if (event.ctrlKey && event.key.toLowerCase() === "r") {
+          event.preventDefault();
+          reloadFrame();
+        }
+      });
+
+      Object.entries(frames).forEach(([kind, frame]) => {
+        frame.addEventListener("load", () => {
+          frame.dataset.loaded = "true";
+          if (kind === activeKind) updateActiveView();
+        });
+      });
+    }
+
+    async function setupWindowControls(tauri) {
+      appWindow = tauri.window.getCurrentWindow();
+
+      async function syncMaximizeState() {
+        const maximized = await appWindow.isMaximized();
+        maximizeButton.classList.toggle("is-maximized", maximized);
+        maximizeButton.title = maximized ? "还原" : "最大化";
+        maximizeButton.setAttribute("aria-label", maximized ? "还原窗口" : "最大化窗口");
+      }
+
+      $("titlebar-minimize").addEventListener("click", () => appWindow.minimize());
+      maximizeButton.addEventListener("click", async () => {
+        await appWindow.toggleMaximize();
+        await syncMaximizeState();
+      });
+      $("titlebar-close").addEventListener("click", () => appWindow.close());
+      window.addEventListener("resize", () => void syncMaximizeState(), { passive: true });
+      window.addEventListener("focus", () => document.body.classList.remove("window-inactive"));
+      window.addEventListener("blur", () => document.body.classList.add("window-inactive"));
+      await syncMaximizeState();
+    }
+
+    async function boot() {
+      try {
+        setupMenus();
+        updateActiveView();
+        tauriApi = window.__TAURI__;
+        if (!tauriApi) {
+          const windows = instances.get("windows");
+          windows.log = ["[dsh-gui] 未检测到 Tauri 注入，页面仅作静态预览。"];
+          updateActiveView();
+          return;
+        }
+
+        await setupWindowControls(tauriApi);
+        await tauriApi.event.listen("dsh-instance", (event) => applySnapshot(event.payload));
+        const snapshot = await tauriApi.core.invoke("status");
+        (snapshot.instances || []).forEach(applySnapshot);
+        setWslDistributions(snapshot.wsl_distributions || []);
+      } catch (error) {
+        const instance = activeInstance();
+        applySnapshot({
+          ...instance,
+          phase: "error",
+          url: null,
+          error: "桌面窗口初始化失败：" + error,
+          log: [...(instance.log || []), "[dsh-gui] 初始化失败: " + error],
+        });
+      }
+    }
+
+    void boot();
+  </script>
+</body>
+</html>
