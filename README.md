@@ -1,62 +1,118 @@
 # dsh-gui
 
-DeepSeek Harness 的 Tauri 桌面壳：调用**全局安装**的 `dsh` 命令拉起 web
-服务，再把页面嵌入带精简自定义标题栏的桌面窗口。在 Windows 上既可运行本机
-`dsh`，也可从标题栏选择一个 WSL 发行版并运行其中安装的 Linux 版 `dsh`。
-项目本身**不依赖 dsh 的任何 npm 包**——不 import、不 require，只以子进程
-方式调用命令行。
+[![Build](https://github.com/gmryuuko/dsh-gui/actions/workflows/build.yml/badge.svg)](https://github.com/gmryuuko/dsh-gui/actions/workflows/build.yml)
+
+一个面向 Windows 的轻量级 [Tauri](https://tauri.app/) 桌面客户端，用原生窗口运行
+DeepSeek Harness 的 `dsh web`。它可以同时管理 Windows 与 WSL 中的 dsh 实例，并在
+两个 Web 界面之间即时切换。
+
+> dsh-gui 只负责桌面窗口和进程管理，不包含 dsh，也不依赖 dsh 的 npm 包。
+> 使用前需要在 Windows 或目标 WSL 发行版中单独安装 `dsh` 命令。
+
+## 功能
+
+- 启动时自动发现并运行 Windows 全局安装的 `dsh`。
+- 枚举 WSL 发行版，并按需启动所选发行版中的 Linux 原生 `dsh`。
+- Windows 与 WSL 实例使用独立进程、动态端口、日志和 Web 视图，互不干扰。
+- 可从标题栏启动、停止或重启实例，切换实例时不会卸载另一侧页面。
+- 实时显示 dsh 的启动日志和错误信息。
+- 关闭窗口时清理所有子进程，避免留下后台服务。
+- 自动保存并恢复窗口大小、位置和最大化状态。
+- 前端是随程序打包的静态 HTML，无 Node.js 构建步骤和运行时依赖。
+
+## 运行要求
+
+| 项目 | 要求 |
+| --- | --- |
+| 操作系统 | Windows 10/11 x64 |
+| WebView | Microsoft Edge WebView2（Windows 10/11 通常已预装） |
+| Windows dsh | 全局安装，且 `where.exe dsh` 可以找到 |
+| WSL dsh | 可选；需要在每个要使用的发行版中分别安装 |
+
+在 Windows 中安装并确认 dsh：
+
+```powershell
+npm install --global @deepseek-ai/dsh
+dsh --version
+```
+
+如果需要使用 WSL 实例，请进入对应发行版后再次安装：
+
+```sh
+npm install --global @deepseek-ai/dsh
+dsh --version
+```
+
+dsh-gui 会通过发行版的登录 shell 查找命令，因此也兼容由 NVM 管理的 Node.js。
+为避免误启动 Windows npm shim，WSL 实例只接受发行版内的 Linux 原生 dsh 路径。
+
+## 获取与使用
+
+1. 打开仓库的 [Actions](https://github.com/gmryuuko/dsh-gui/actions/workflows/build.yml) 页面。
+2. 进入最近一次成功的 **Build** 运行，下载 `dsh-gui-windows-x64` 产物。
+3. 解压并运行 `dsh-gui.exe`。
+4. Windows 实例会自动启动；需要 WSL 时，在标题栏选择发行版并启动实例。
+
+当前 CI 产物是未签名的便携版可执行文件，不是安装包。Windows SmartScreen 可能会在
+首次运行时显示提示。
+
+## 从源码构建
+
+准备 Rust stable 工具链、MSVC C++ Build Tools 和 WebView2 开发环境。运行 dsh-gui
+时仍需安装 dsh，但编译本身不依赖 dsh。
+
+```powershell
+git clone git@github.com:gmryuuko/dsh-gui.git
+cd dsh-gui
+
+# 开发运行
+cargo run --manifest-path src-tauri/Cargo.toml
+
+# 测试
+cargo test --locked --manifest-path src-tauri/Cargo.toml
+
+# Release 构建
+cargo build --release --locked --manifest-path src-tauri/Cargo.toml
+```
+
+构建产物位于 `src-tauri/target/release/dsh-gui.exe`。
 
 ## 工作原理
 
-1. 启动时自动定位并启动 Windows 全局 `dsh`（`where.exe dsh`，优先 `.cmd`
-   shim，兜底 `%APPDATA%\npm\dsh.cmd`）。标题栏同时列出 `wsl.exe -l -q`
-   返回的发行版；WSL 实例由用户明确选择发行版后再启动。
-2. Windows 以 `dsh web --port 0` 启动。WSL 实例先在 Windows 侧预留独立
-   空闲端口，再通过所选发行版的登录 shell 启动 dsh，以兼容 NVM 等只在登录
-   环境配置 Node PATH 的安装方式。程序只接受发行版内的 Linux 原生 dsh 路径，
-   不会误用 WSL PATH 中 `/mnt/c/...` 指向的 Windows npm shim。两个实例拥有
-   独立的进程、端口和日志。
-3. 读取各子进程 stdout，等到就绪行 `dsh web: http://127.0.0.1:<port>`
-   （dsh web 打印该行即表示服务已绑定端口），把地址交给窗口内的 Web 区域
-   加载。Windows 与 WSL 使用两个常驻 iframe，标题栏切换时不会卸载另一边
-   的页面。WSL 运行期间改选发行版不会立即中断当前实例，管理菜单会提供明确的
-   `Switch to <发行版>` 操作。
-4. 期间子进程的 stdout/stderr 实时转发到加载页显示（首次启动如要安装
-   profile 依赖会花较长时间，日志可见）。
-5. 可以在标题栏分别启动、停止或重启 Windows / WSL 实例。关闭窗口时会清理
-   两棵进程树（Windows：`taskkill /PID <pid> /T /F`），不留孤儿进程。
-6. Tauri 官方 window-state 插件在退出时保存窗口位置、大小和最大化状态，
-   下次启动自动恢复。
+1. 程序查找 Windows 全局 dsh，并以 `dsh web --port 0` 启动独立服务。
+2. 用户选择 WSL 发行版后，程序在 Windows 侧分配空闲端口，再通过该发行版的登录
+   shell 启动 dsh。
+3. 后端读取 stdout 中的 `dsh web: http://127.0.0.1:<port>` 就绪信息，并把地址交给
+   对应的内嵌 WebView。
+4. 两个实例的生命周期和日志分别管理；退出桌面应用时统一清理进程树。
 
-## 结构
+每次启动都会创建新的 dsh web 实例，不会接管已经运行的默认端口服务。
 
-```
-ui/                双实例标题栏、加载页和 dsh Web 容器（无构建步骤、无 node 依赖）
-src-tauri/         Tauri v2 Rust 工程
-  src/lib.rs       双实例逻辑：定位 dsh、WSL 发行版、spawn、就绪检测、退出清理
-  tauri.conf.json  窗口配置；withGlobalTauri 开启，页面直接用 __TAURI__
-scripts/gen-icons.ps1  图标生成脚本（Windows，System.Drawing）
+## 项目结构
+
+```text
+ui/                         静态前端、标题栏、实例切换和 Web 容器
+src-tauri/
+  src/lib.rs                dsh 发现、Windows/WSL 进程与 Tauri 命令
+  src/main.rs               桌面程序入口
+  capabilities/default.json Tauri 权限配置
+  tauri.conf.json           窗口和应用配置
+scripts/gen-icons.ps1       Windows 图标生成脚本
+.github/workflows/build.yml Windows 测试、Release 构建和产物上传
 ```
 
-## 构建
+## 常见问题
 
-前置条件：Rust 工具链；Windows 全局安装 `npm i -g @deepseek-ai/dsh`；
-Windows 需 WebView2 运行时（Win10/11 一般自带）。WSL 功能是可选的；需要在
-希望使用的每个发行版**内部**另行安装 dsh，并确保登录 shell 能找到它。
+### 提示找不到 dsh
 
-```sh
-cd src-tauri
-cargo build --release          # 产物 target/release/dsh-gui.exe
-cargo tauri build              # 可选：打安装包（需 cargo install tauri-cli）
-```
+先在与 dsh-gui 相同的环境中运行 `dsh --version`。Windows 实例需要 `where.exe dsh`
+能够返回全局命令；WSL 实例需要发行版的登录 shell 能够找到 Linux 原生 dsh。
 
-开发调试用 `cargo build`（debug 版带控制台，`println!`/日志可见）。
+### WSL 列表中没有目标发行版
 
-## 说明
+运行 `wsl.exe -l -q` 确认发行版已经安装并完成首次初始化，然后重新打开 dsh-gui。
 
-- 窗口关闭即结束：Windows 与 WSL dsh 服务进程树随窗口一起退出。
-- Windows 与所选 WSL 发行版会拉起**独立**的 `dsh web`。两边可以同时运行，
-  在标题栏即时切换，也不会占用/接管已经打开的 web 实例。
-- 若未安装 dsh，窗口会显示错误提示而非静默失败。
-- Windows 下用于定位、启动和清理 dsh 的 `where.exe`、`cmd.exe`、
-  `taskkill.exe` 均以无控制台窗口模式运行，不会闪出黑框。
+### 首次启动时间较长
+
+dsh 首次启动可能需要安装或初始化 profile 依赖。启动过程会实时显示在窗口日志中，
+完成后页面会自动载入。
